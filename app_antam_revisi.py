@@ -1,5 +1,3 @@
-app_antam_revisi.py (streamlit)
-
 """
 ============================================================================
  APLIKASI PREDIKSI HARGA SAHAM ANTAM (ANTM)
