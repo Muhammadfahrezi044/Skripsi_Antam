@@ -65,10 +65,14 @@ def compute_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 
-def safe_window(n, default):
-    if n < default:
-        return n if n % 2 == 1 else n - 1
-    return default
+def safe_window(n, default, polyorder=3):
+    """Pastikan window ganjil, <= n, dan > polyorder (syarat savgol_filter)."""
+    w = default if n >= default else (n if n % 2 == 1 else n - 1)
+    if w <= polyorder:           # window harus lebih besar dari polyorder
+        w = polyorder + 1
+    if w % 2 == 0:               # pastikan ganjil
+        w += 1
+    return w
 
 
 def _read_any(file_bytes, file_name):
@@ -310,7 +314,7 @@ if uploaded_file is not None:
         st.subheader("2.9 Boxplot Harga per Tahun")
         df_box = df.copy(); df_box["Year"] = df_box.index.year
         fig, ax = plt.subplots(figsize=(12, 5))
-        sns.boxplot(x="Year", y="Close", data=df_box, palette="Set2", ax=ax)
+        sns.boxplot(x="Year", y="Close", data=df_box, hue="Year", palette="Set2", legend=False, ax=ax)
         ax.set_title("Boxplot Harga Penutupan per Tahun"); ax.set_xlabel("Tahun"); ax.set_ylabel("Harga Close (IDR)")
         st.pyplot(fig)
 
@@ -387,12 +391,12 @@ if uploaded_file is not None:
         with ca:
             imp = pd.DataFrame({"Fitur": features, "Importance": xgb_model.feature_importances_}).sort_values("Importance", ascending=False)
             fig, ax = plt.subplots(figsize=(8, 6))
-            sns.barplot(x="Importance", y="Fitur", data=imp, palette="coolwarm", ax=ax)
+            sns.barplot(x="Importance", y="Fitur", data=imp, hue="Fitur", palette="coolwarm", legend=False, ax=ax)
             ax.set_title("XGBoost"); st.pyplot(fig)
         with cb:
             imp = pd.DataFrame({"Fitur": features, "Importance": rf_model.feature_importances_}).sort_values("Importance", ascending=False)
             fig, ax = plt.subplots(figsize=(8, 6))
-            sns.barplot(x="Importance", y="Fitur", data=imp, palette="viridis", ax=ax)
+            sns.barplot(x="Importance", y="Fitur", data=imp, hue="Fitur", palette="viridis", legend=False, ax=ax)
             ax.set_title("Random Forest"); st.pyplot(fig)
 
         st.subheader("5.3 Aktual vs Prediksi (Gabungan)")
