@@ -275,7 +275,7 @@ if uploaded_file is not None:
         c2.metric("Harga Terendah", f"Rp {df['Close'].min():,.0f}")
         c3.metric("Harga Tertinggi", f"Rp {df['Close'].max():,.0f}")
 
-        st.subheader("5 Data Teratas")
+        st.subheader("1.5 Data Teratas")
         st.dataframe(df.head(), use_container_width=True)
 
         st.subheader("2.6 Grafik Pergerakan Harga Close")
