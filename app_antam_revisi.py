@@ -275,8 +275,28 @@ if uploaded_file is not None:
         c2.metric("Harga Terendah", f"Rp {df['Close'].min():,.0f}")
         c3.metric("Harga Tertinggi", f"Rp {df['Close'].max():,.0f}")
 
-        st.subheader("2.5 Data Teratas")
+        st.subheader("2.1 Data Teratas")
         st.dataframe(df.head(), use_container_width=True)
+
+        st.subheader("2.2 Data Terbawah")
+        st.dataframe(df.tail(), use_container_width=True)
+
+        st.subheader("2.3 Informasi Dataset")
+        info = pd.DataFrame({
+            "Kolom": df.columns,
+            "Non-Null": [df[c].notna().sum() for c in df.columns],
+            "Tipe Data": [str(df[c].dtype) for c in df.columns],
+        })
+        st.dataframe(info, use_container_width=True)
+        st.caption(f"Total {df.shape[0]:,} baris dan {df.shape[1]} kolom.")
+
+        st.subheader("2.4 Deskripsi Statistik")
+        st.dataframe(df.describe(), use_container_width=True)
+
+        st.subheader("2.5 Cek Missing Values")
+        miss = df.isnull().sum().reset_index()
+        miss.columns = ["Kolom", "Jumlah Missing"]
+        st.dataframe(miss, use_container_width=True)
 
         st.subheader("2.6 Grafik Pergerakan Harga Close")
         fig, ax = plt.subplots(figsize=(14, 5))
