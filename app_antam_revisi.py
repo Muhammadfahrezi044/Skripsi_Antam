@@ -318,9 +318,44 @@ if uploaded_file is not None:
         ax.set_title("Boxplot Harga Penutupan per Tahun"); ax.set_xlabel("Tahun"); ax.set_ylabel("Harga Close (IDR)")
         st.pyplot(fig)
 
+        st.subheader("2.10 Koefisien Variasi (CV) per Tahun")
+        cv_per_year = df_box.groupby("Year")["Close"].agg(["mean", "std"])
+        cv_per_year["CV in %"] = (cv_per_year["std"] / cv_per_year["mean"]) * 100
+        st.dataframe(cv_per_year.style.format({"mean": "{:.2f}", "std": "{:.2f}", "CV in %": "{:.2f}"}),
+                     use_container_width=True)
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.bar(cv_per_year.index.astype(str), cv_per_year["CV in %"], color="steelblue", edgecolor="black")
+        for i, v in enumerate(cv_per_year["CV in %"]):
+            ax.text(i, v + 0.05, f"{v:.2f}%", ha="center", fontsize=9)
+        ax.set_title("Koefisien Variasi (CV) Harga Saham ANTM per Tahun")
+        ax.set_xlabel("Tahun"); ax.set_ylabel("CV (%)")
+        st.pyplot(fig)
+
+        st.subheader("2.11 Matriks Korelasi (Mean, Std, CV)")
+        fig, ax = plt.subplots(figsize=(6, 5))
+        sns.heatmap(cv_per_year.corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
+        ax.set_title("Matriks Korelasi (Mean, Std, CV)")
+        st.pyplot(fig)
+
     # --------------------------------------------------------------------
     elif menu == "📈 Analisis Teknikal":
         st.title("📈 Analisis Teknikal")
+
+        st.subheader("3.3 Grafik Daily Return")
+        fig, ax = plt.subplots(figsize=(14, 4))
+        ax.plot(df.index, df["Daily Return"], color="teal", linewidth=0.5, alpha=0.25, label="Daily Return Asli")
+        ax.plot(df.index, df["Daily Return"].rolling(10, center=True, min_periods=1).mean(),
+                color="teal", linewidth=2, label="Daily Return (MA-10)")
+        ax.axhline(0, color="black", linewidth=0.6)
+        ax.set_title("Daily Return Saham ANTAM"); ax.set_xlabel("Tanggal"); ax.set_ylabel("Return Harian")
+        ax.legend(); st.pyplot(fig)
+
+        st.subheader("3.4 Distribusi Daily Return")
+        fig, ax = plt.subplots(figsize=(10, 5))
+        sns.histplot(df["Daily Return"].dropna(), bins=60, kde=True, color="teal", ax=ax)
+        ax.set_title("Distribusi Daily Return Saham ANTAM")
+        ax.set_xlabel("Daily Return"); ax.set_ylabel("Frekuensi")
+        st.pyplot(fig)
 
         st.subheader("3.5 Moving Average (SMA-50 & SMA-200)")
         fig, ax = plt.subplots(figsize=(14, 6))
@@ -399,8 +434,48 @@ if uploaded_file is not None:
             sns.barplot(x="Importance", y="Fitur", data=imp, hue="Fitur", palette="viridis", legend=False, ax=ax)
             ax.set_title("Random Forest"); st.pyplot(fig)
 
-        st.subheader("5.3 Aktual vs Prediksi (Gabungan)")
+        st.subheader("4.4 Visualisasi Pohon Random Forest")
+        with st.spinner("Merender pohon keputusan (agak lambat)..."):
+            from sklearn.tree import plot_tree
+            rf_vis = RandomForestRegressor(n_estimators=10, max_depth=3, random_state=42)
+            rf_vis.fit(X_train, y_train)
+            fig, ax = plt.subplots(figsize=(22, 10))
+            plot_tree(rf_vis.estimators_[0], feature_names=features,
+                      filled=True, rounded=True, fontsize=9, ax=ax)
+            ax.set_title("Visualisasi Random Forest Regressor (max_depth=3) – Pohon Pertama")
+            st.pyplot(fig)
+
+        st.subheader("4.6 Tabel Perbandingan Aktual vs Prediksi")
         idx = X_test.index
+        hasil_pred = pd.DataFrame({
+            "Close (Aktual)": y_test, "XGBoost_Pred": y_pred_xgb, "RF_Pred": y_pred_rf
+        }, index=idx).sort_index()
+        st.dataframe(pd.concat([hasil_pred.head(5), hasil_pred.tail(5)]).style.format("{:,.2f}"),
+                     use_container_width=True)
+
+        st.subheader("5.1 Aktual vs Prediksi – XGBoost")
+        idx = X_test.index
+        wl_p = safe_window(len(y_test), 21)
+        p_xgb = pd.DataFrame({"Aktual": y_test, "Prediksi": y_pred_xgb}, index=idx).sort_index()
+        fig, ax = plt.subplots(figsize=(14, 6))
+        ax.plot(p_xgb.index, p_xgb["Aktual"], color="black", alpha=0.2, linewidth=0.7)
+        ax.plot(p_xgb.index, p_xgb["Prediksi"], color="blue", alpha=0.2, linewidth=0.7)
+        ax.plot(p_xgb.index, savgol_filter(p_xgb["Aktual"].values, wl_p, 3), label="Aktual (Smoothed)", color="black", linewidth=2.5)
+        ax.plot(p_xgb.index, savgol_filter(p_xgb["Prediksi"].values, wl_p, 3), label="Prediksi XGBoost (Smoothed)", color="blue", linewidth=2)
+        ax.set_title("Aktual vs Prediksi – XGBoost (Data Uji)"); ax.set_xlabel("Tanggal"); ax.set_ylabel("Harga Close (IDR)")
+        ax.legend(); st.pyplot(fig)
+
+        st.subheader("5.2 Aktual vs Prediksi – Random Forest")
+        p_rf = pd.DataFrame({"Aktual": y_test, "Prediksi": y_pred_rf}, index=idx).sort_index()
+        fig, ax = plt.subplots(figsize=(14, 6))
+        ax.plot(p_rf.index, p_rf["Aktual"], color="black", alpha=0.2, linewidth=0.7)
+        ax.plot(p_rf.index, p_rf["Prediksi"], color="red", alpha=0.2, linewidth=0.7)
+        ax.plot(p_rf.index, savgol_filter(p_rf["Aktual"].values, wl_p, 3), label="Aktual (Smoothed)", color="black", linewidth=2.5)
+        ax.plot(p_rf.index, savgol_filter(p_rf["Prediksi"].values, wl_p, 3), label="Prediksi Random Forest (Smoothed)", color="red", linewidth=2)
+        ax.set_title("Aktual vs Prediksi – Random Forest (Data Uji)"); ax.set_xlabel("Tanggal"); ax.set_ylabel("Harga Close (IDR)")
+        ax.legend(); st.pyplot(fig)
+
+        st.subheader("5.3 Aktual vs Prediksi (Gabungan)")
         pdf = pd.DataFrame({"Aktual": y_test, "XGBoost": y_pred_xgb, "Random Forest": y_pred_rf}, index=idx).sort_index()
         wl = safe_window(len(pdf), 21)
         fig, ax = plt.subplots(figsize=(14, 6))
@@ -409,6 +484,43 @@ if uploaded_file is not None:
         ax.plot(pdf.index, savgol_filter(pdf["Random Forest"].values, wl, 3), label="Random Forest (Smoothed)", color="red", linewidth=2)
         ax.set_title("Aktual vs Prediksi (Data Uji)"); ax.set_xlabel("Tanggal"); ax.set_ylabel("Harga Close (IDR)")
         ax.legend(); st.pyplot(fig)
+
+        st.subheader("5.4 Scatter Plot Aktual vs Prediksi")
+        ca, cb = st.columns(2)
+        with ca:
+            fig, ax = plt.subplots(figsize=(7, 6))
+            ax.scatter(y_test, y_pred_xgb, alpha=0.4, color="blue", s=12)
+            lims = [min(y_test.min(), y_pred_xgb.min()), max(y_test.max(), y_pred_xgb.max())]
+            ax.plot(lims, lims, "--", color="black", linewidth=1)
+            ax.set_title("Scatter – XGBoost"); ax.set_xlabel("Aktual"); ax.set_ylabel("Prediksi")
+            st.pyplot(fig)
+        with cb:
+            fig, ax = plt.subplots(figsize=(7, 6))
+            ax.scatter(y_test, y_pred_rf, alpha=0.4, color="red", s=12)
+            lims = [min(y_test.min(), y_pred_rf.min()), max(y_test.max(), y_pred_rf.max())]
+            ax.plot(lims, lims, "--", color="black", linewidth=1)
+            ax.set_title("Scatter – Random Forest"); ax.set_xlabel("Aktual"); ax.set_ylabel("Prediksi")
+            st.pyplot(fig)
+
+        st.subheader("5.5 Distribusi Residual / Error")
+        res_xgb = y_test.values - y_pred_xgb
+        res_rf = y_test.values - y_pred_rf
+        fig, ax = plt.subplots(figsize=(12, 5))
+        sns.histplot(res_xgb, bins=40, kde=True, color="blue", alpha=0.5, label="XGBoost", ax=ax)
+        sns.histplot(res_rf, bins=40, kde=True, color="red", alpha=0.5, label="Random Forest", ax=ax)
+        ax.axvline(0, color="black", linewidth=0.8)
+        ax.set_title("Distribusi Residual (Error) Kedua Model")
+        ax.set_xlabel("Residual (Aktual - Prediksi)"); ax.set_ylabel("Frekuensi")
+        ax.legend(); st.pyplot(fig)
+
+        st.subheader("5.6 Perbandingan MAPE")
+        fig, ax = plt.subplots(figsize=(8, 5))
+        mape_vals = [hasil.loc[0, "MAPE (%)"], hasil.loc[1, "MAPE (%)"]]
+        bars = ax.bar(["XGBoost", "Random Forest"], mape_vals, color=["blue", "red"], edgecolor="black")
+        for b, v in zip(bars, mape_vals):
+            ax.text(b.get_x() + b.get_width()/2, v, f"{v:.4f}%", ha="center", va="bottom", fontsize=10)
+        ax.set_title("Perbandingan MAPE Kedua Model"); ax.set_ylabel("MAPE (%)")
+        st.pyplot(fig)
 
     # --------------------------------------------------------------------
     elif menu == "🔮 Prediksi":
