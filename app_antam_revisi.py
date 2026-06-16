@@ -293,7 +293,8 @@ if uploaded_file is not None:
         ax.legend(); st.pyplot(fig)
 
         st.subheader("2.8 Candlestick (Setahun Terakhir)")
-        last_year = df.last("365D").copy()
+        cutoff = df.index.max() - pd.Timedelta(days=365)
+        last_year = df[df.index >= cutoff].copy()
         fig, ax = plt.subplots(figsize=(14, 6))
         w = 0.6
         for date, row in last_year.iterrows():
