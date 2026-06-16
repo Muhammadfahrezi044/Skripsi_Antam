@@ -78,7 +78,7 @@ def compute_rsi(series, period=14):
 
 
 def safe_window(n, default):
-    """Pastikan window length untuk savgol_filter ganjil dan <= n."""
+    """Pastikan window length untuk _filter ganjil dan <= n."""
     if n < default:
         return n if n % 2 == 1 else n - 1
     return default
@@ -249,7 +249,7 @@ if uploaded_file is not None:
         ax.plot(df.index, df["Close"], color="navy", alpha=0.25, linewidth=0.7, label="Close (Asli)")
         n_c = len(df["Close"].dropna())
         wl_c = safe_window(n_c, 51)
-        close_s = savgol_filter(df["Close"].fillna(method="bfill").values, window_length=wl_c, polyorder=3)
+        close_s = savgol_filter(df["Close"].bfill().ffill().values, window_length=wl_c, polyorder=3)
         ax.plot(df.index, close_s, color="navy", linewidth=2, label="Close (Smoothed)")
         ax.set_title("Grafik Pergerakan Harga Close Saham ANTAM")
         ax.set_xlabel("Tanggal")
