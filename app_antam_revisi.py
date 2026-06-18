@@ -371,10 +371,47 @@ if uploaded_file is not None:
         ax.legend(); st.pyplot(fig)
 
         st.subheader("3.4 Distribusi Daily Return")
+        dr = df["Daily Return"].dropna()
+        avg_dr = dr.mean()
+        std_dr = dr.std()
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Average Daily Return", f"{avg_dr*100:.4f}%")
+        c2.metric("Std Daily Return", f"{std_dr*100:.4f}%")
+        c3.metric("Jumlah Hari", f"{len(dr):,}")
+
         fig, ax = plt.subplots(figsize=(10, 5))
-        sns.histplot(df["Daily Return"].dropna(), bins=60, kde=True, color="teal", ax=ax)
+        sns.histplot(dr, bins=60, kde=True, color="teal", ax=ax)
+        ax.axvline(avg_dr, color="red", linestyle="--", linewidth=1.8,
+                   label=f"Average Daily Return = {avg_dr:.4f}")
         ax.set_title("Distribusi Daily Return Saham ANTAM")
         ax.set_xlabel("Daily Return"); ax.set_ylabel("Frekuensi")
+        ax.legend()
+        st.pyplot(fig)
+
+        st.subheader("3.4.1 Rata-Rata Daily Return (Average Daily Return)")
+        fig, ax = plt.subplots(figsize=(12, 5))
+        sns.histplot(dr, bins=60, kde=False, color="teal", alpha=0.6, ax=ax)
+        ax.axvline(avg_dr, color="red", linestyle="--", linewidth=2,
+                   label=f"Average Daily Return ({avg_dr:.5f})")
+        ax.set_title("Distribusi Daily Return Saham ANTAM beserta Rata-ratanya")
+        ax.set_xlabel("Daily Return"); ax.set_ylabel("Frekuensi")
+        ax.legend()
+        st.pyplot(fig)
+
+        st.subheader("3.4.2 Average Daily Return per Tahun")
+        dfy = df.copy(); dfy["Year"] = dfy.index.year
+        avg_per_year = dfy.groupby("Year")["Daily Return"].mean()
+        fig, ax = plt.subplots(figsize=(12, 5))
+        colors = ["green" if v >= 0 else "red" for v in avg_per_year.values]
+        bars = ax.bar(avg_per_year.index.astype(str), avg_per_year.values * 100,
+                      color=colors, edgecolor="black", alpha=0.7)
+        for b, v in zip(bars, avg_per_year.values * 100):
+            ax.text(b.get_x() + b.get_width()/2, v, f"{v:.3f}%",
+                    ha="center", va="bottom" if v >= 0 else "top", fontsize=8)
+        ax.axhline(0, color="black", linewidth=0.8)
+        ax.set_title("Average Daily Return Saham ANTAM per Tahun")
+        ax.set_xlabel("Tahun"); ax.set_ylabel("Average Daily Return (%)")
         st.pyplot(fig)
 
         st.subheader("3.5 Moving Average (SMA-50 & SMA-200)")
@@ -420,6 +457,29 @@ if uploaded_file is not None:
         sns.heatmap(df_model[features + [target]].corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
         ax.set_title("Matriks Korelasi Fitur dan Target"); st.pyplot(fig)
 
+        st.subheader("3.7 Pemilihan Fitur")
+        st.markdown("Fitur yang digunakan sebagai variabel input (X) untuk memprediksi "
+                    "harga penutupan (Close) terdiri dari 9 fitur berikut:")
+        fitur_df = pd.DataFrame({
+            "No": range(1, len(features) + 1),
+            "Nama Fitur": features,
+            "Keterangan": [
+                "Harga pembukaan saham", "Harga tertinggi saham", "Harga terendah saham",
+                "Volume perdagangan", "Rata-rata bergerak 50 hari", "Rata-rata bergerak 200 hari",
+                "Relative Strength Index", "Harga penutupan emas", "Harga penutupan nikel"
+            ]
+        })
+        st.dataframe(fitur_df, use_container_width=True, hide_index=True)
+        st.caption(f"Target (y): Close — harga penutupan saham ANTM.")
+
+        st.subheader("3.9 Split Data Latih dan Data Uji (80:20)")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Data", f"{len(X):,}")
+        c2.metric("Data Latih (80%)", f"{X_train.shape[0]:,}")
+        c3.metric("Data Uji (20%)", f"{X_test.shape[0]:,}")
+        st.caption("Pembagian dilakukan secara berurutan (shuffle=False) agar urutan waktu "
+                   "tetap terjaga sesuai karakteristik data time-series.")
+
     # --------------------------------------------------------------------
     elif menu == "🤖 Pemodelan & Evaluasi":
         st.title("🤖 Pemodelan & Evaluasi")
@@ -429,11 +489,12 @@ if uploaded_file is not None:
             y_pred_rf = rf_model.predict(X_test)
         st.success("Model selesai dilatih!")
 
+        st.subheader("4.1 & 4.3 Pelatihan Model (XGBoost & Random Forest)")
         c1, c2 = st.columns(2)
         c1.metric("Data Latih", f"{X_train.shape[0]:,}")
         c2.metric("Data Uji", f"{X_test.shape[0]:,}")
 
-        st.subheader("Hasil Evaluasi")
+        st.markdown("**Hasil Evaluasi Metrik Akurasi**")
         hasil = pd.DataFrame([evaluate(y_test, y_pred_xgb, "XGBoost"),
                               evaluate(y_test, y_pred_rf, "Random Forest")])
         st.dataframe(hasil.style.format({"MAPE (%)": "{:.4f}", "MAE": "{:.2f}", "RMSE": "{:.2f}", "R²": "{:.4f}"}),
@@ -441,18 +502,18 @@ if uploaded_file is not None:
         best = hasil.loc[hasil["MAPE (%)"].idxmin(), "Model"]
         st.info(f"🏆 Model terbaik (MAPE terendah): **{best}**")
 
-        st.subheader("Feature Importance")
+        st.subheader("4.2 & 4.5 Feature Importance")
         ca, cb = st.columns(2)
         with ca:
             imp = pd.DataFrame({"Fitur": features, "Importance": xgb_model.feature_importances_}).sort_values("Importance", ascending=False)
             fig, ax = plt.subplots(figsize=(8, 6))
             sns.barplot(x="Importance", y="Fitur", data=imp, hue="Fitur", palette="coolwarm", legend=False, ax=ax)
-            ax.set_title("XGBoost"); st.pyplot(fig)
+            ax.set_title("Feature Importance – XGBoost"); st.pyplot(fig)
         with cb:
             imp = pd.DataFrame({"Fitur": features, "Importance": rf_model.feature_importances_}).sort_values("Importance", ascending=False)
             fig, ax = plt.subplots(figsize=(8, 6))
             sns.barplot(x="Importance", y="Fitur", data=imp, hue="Fitur", palette="viridis", legend=False, ax=ax)
-            ax.set_title("Random Forest"); st.pyplot(fig)
+            ax.set_title("Feature Importance – Random Forest"); st.pyplot(fig)
 
         st.subheader("4.4 Visualisasi Pohon Random Forest")
         with st.spinner("Merender pohon keputusan (agak lambat)..."):
@@ -545,6 +606,7 @@ if uploaded_file is not None:
     # --------------------------------------------------------------------
     elif menu == "🔮 Prediksi":
         st.title("🔮 Prediksi Harga ke Depan")
+        st.subheader("5.7 Prediksi 30 Hari ke Depan")
         with st.spinner("Melatih model..."):
             xgb_model, rf_model = train_models(X_train.values, y_train.values, features)
         n_days = st.slider("Jumlah hari prediksi", 7, 60, 30)
