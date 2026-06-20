@@ -92,14 +92,12 @@ def _read_any(file_bytes, file_name):
             pass
         raw = pd.read_csv(io.BytesIO(file_bytes), header=None)
 
-    # Sudah rapi (>=7 kolom)
     if raw.shape[1] >= 7:
         if str(raw.iloc[0, 1]).strip().strip('"') in ("Terakhir", "Pembukaan"):
             raw = raw.iloc[1:].reset_index(drop=True)
         raw.columns = expected[:raw.shape[1]]
         return raw
 
-    # File 1 kolom: CSV mentah tergabung
     col0 = raw.iloc[:, 0].astype(str).str.replace('"', "", regex=False)
     col0 = col0[~col0.str.startswith("Tanggal")].reset_index(drop=True)
     rows = []
@@ -126,7 +124,6 @@ def load_and_process(file_bytes, file_name, fetch_online=True):
         "Terendah": "Low", "Vol.": "Volume", "Perubahan%": "Perubahan%",
     })
 
-    # Konversi harga (verified identik dengan notebook)
     for col in ["Close", "Open", "High", "Low"]:
         s = df[col].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
         df[col] = pd.to_numeric(s, errors="coerce")
@@ -261,9 +258,29 @@ if uploaded_file is not None:
     features = ["Open", "High", "Low", "Volume", "SMA_50", "SMA_200",
                 "RSI", "Gold_Close", "Nickel_Close"]
     target = "Close"
-    df_model = df.dropna(subset=["SMA_50", "SMA_200", "RSI"])
-    X, y = df_model[features], df_model[target]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+
+    df_model = df.dropna(subset=["SMA_50", "SMA_200", "RSI"]).copy()
+    df_model["Target_Return"] = df_model["Close"].pct_change().shift(-1)
+    df_model = df_model.dropna(subset=["Target_Return"])
+
+    X = df_model[features]
+    y = df_model["Target_Return"]         
+    close_price = df_model["Close"]      
+
+    split_idx = int(len(X) * 0.8)
+    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+    close_train, close_test = close_price.iloc[:split_idx], close_price.iloc[split_idx:]
+
+    def predict_price(model, X_te, close_te):
+        """Prediksi return lalu rekonstruksi ke harga; kembalikan df aktual vs prediksi."""
+        ret_pred = model.predict(X_te)
+        price_pred = close_te.values * (1 + ret_pred)
+        out = pd.DataFrame({
+            "Aktual"  : close_te.shift(-1),
+            "Prediksi": price_pred
+        }, index=close_te.index).dropna()
+        return out
 
     # --------------------------------------------------------------------
     if menu == "📊 Eksplorasi Data":
@@ -485,8 +502,12 @@ if uploaded_file is not None:
         st.title("🤖 Pemodelan & Evaluasi")
         with st.spinner("Melatih model..."):
             xgb_model, rf_model = train_models(X_train.values, y_train.values, features)
-            y_pred_xgb = xgb_model.predict(X_test)
-            y_pred_rf = rf_model.predict(X_test)
+            hasil_xgb = predict_price(xgb_model, X_test, close_test)
+            hasil_rf  = predict_price(rf_model,  X_test, close_test)
+            y_actual_xgb = hasil_xgb["Aktual"].values
+            y_pred_xgb   = hasil_xgb["Prediksi"].values
+            y_actual_rf  = hasil_rf["Aktual"].values
+            y_pred_rf    = hasil_rf["Prediksi"].values
         st.success("Model selesai dilatih!")
 
         st.subheader("4.1 & 4.3 Pelatihan Model (XGBoost & Random Forest)")
@@ -495,8 +516,8 @@ if uploaded_file is not None:
         c2.metric("Data Uji", f"{X_test.shape[0]:,}")
 
         st.markdown("**Hasil Evaluasi Metrik Akurasi**")
-        hasil = pd.DataFrame([evaluate(y_test, y_pred_xgb, "XGBoost"),
-                              evaluate(y_test, y_pred_rf, "Random Forest")])
+        hasil = pd.DataFrame([evaluate(y_actual_xgb, y_pred_xgb, "XGBoost"),
+                              evaluate(y_actual_rf, y_pred_rf, "Random Forest")])
         st.dataframe(hasil.style.format({"MAPE (%)": "{:.4f}", "MAE": "{:.2f}", "RMSE": "{:.2f}", "R²": "{:.4f}"}),
                      use_container_width=True)
         best = hasil.loc[hasil["MAPE (%)"].idxmin(), "Model"]
@@ -527,17 +548,17 @@ if uploaded_file is not None:
             st.pyplot(fig)
 
         st.subheader("4.6 Tabel Perbandingan Aktual vs Prediksi")
-        idx = X_test.index
         hasil_pred = pd.DataFrame({
-            "Close (Aktual)": y_test, "XGBoost_Pred": y_pred_xgb, "RF_Pred": y_pred_rf
-        }, index=idx).sort_index()
+            "Close (Aktual)": hasil_xgb["Aktual"],
+            "XGBoost_Pred"  : hasil_xgb["Prediksi"],
+            "RF_Pred"       : hasil_rf["Prediksi"]
+        }).sort_index()
         st.dataframe(pd.concat([hasil_pred.head(5), hasil_pred.tail(5)]).style.format("{:,.2f}"),
                      use_container_width=True)
 
         st.subheader("5.1 Aktual vs Prediksi – XGBoost")
-        idx = X_test.index
-        wl_p = safe_window(len(y_test), 21)
-        p_xgb = pd.DataFrame({"Aktual": y_test, "Prediksi": y_pred_xgb}, index=idx).sort_index()
+        wl_p = safe_window(len(hasil_xgb), 21)
+        p_xgb = hasil_xgb.sort_index()
         fig, ax = plt.subplots(figsize=(14, 6))
         ax.plot(p_xgb.index, p_xgb["Aktual"], color="black", alpha=0.2, linewidth=0.7)
         ax.plot(p_xgb.index, p_xgb["Prediksi"], color="blue", alpha=0.2, linewidth=0.7)
@@ -547,7 +568,7 @@ if uploaded_file is not None:
         ax.legend(); st.pyplot(fig)
 
         st.subheader("5.2 Aktual vs Prediksi – Random Forest")
-        p_rf = pd.DataFrame({"Aktual": y_test, "Prediksi": y_pred_rf}, index=idx).sort_index()
+        p_rf = hasil_rf.sort_index()
         fig, ax = plt.subplots(figsize=(14, 6))
         ax.plot(p_rf.index, p_rf["Aktual"], color="black", alpha=0.2, linewidth=0.7)
         ax.plot(p_rf.index, p_rf["Prediksi"], color="red", alpha=0.2, linewidth=0.7)
@@ -557,7 +578,8 @@ if uploaded_file is not None:
         ax.legend(); st.pyplot(fig)
 
         st.subheader("5.3 Aktual vs Prediksi (Gabungan)")
-        pdf = pd.DataFrame({"Aktual": y_test, "XGBoost": y_pred_xgb, "Random Forest": y_pred_rf}, index=idx).sort_index()
+        pdf = pd.DataFrame({"Aktual": hasil_xgb["Aktual"], "XGBoost": hasil_xgb["Prediksi"],
+                            "Random Forest": hasil_rf["Prediksi"]}).sort_index()
         wl = safe_window(len(pdf), 21)
         fig, ax = plt.subplots(figsize=(14, 6))
         ax.plot(pdf.index, savgol_filter(pdf["Aktual"].values, wl, 3), label="Aktual (Smoothed)", color="black", linewidth=2.5)
@@ -570,22 +592,22 @@ if uploaded_file is not None:
         ca, cb = st.columns(2)
         with ca:
             fig, ax = plt.subplots(figsize=(7, 6))
-            ax.scatter(y_test, y_pred_xgb, alpha=0.4, color="blue", s=12)
-            lims = [min(y_test.min(), y_pred_xgb.min()), max(y_test.max(), y_pred_xgb.max())]
+            ax.scatter(y_actual_xgb, y_pred_xgb, alpha=0.4, color="blue", s=12)
+            lims = [min(y_actual_xgb.min(), y_pred_xgb.min()), max(y_actual_xgb.max(), y_pred_xgb.max())]
             ax.plot(lims, lims, "--", color="black", linewidth=1)
             ax.set_title("Scatter – XGBoost"); ax.set_xlabel("Aktual"); ax.set_ylabel("Prediksi")
             st.pyplot(fig)
         with cb:
             fig, ax = plt.subplots(figsize=(7, 6))
-            ax.scatter(y_test, y_pred_rf, alpha=0.4, color="red", s=12)
-            lims = [min(y_test.min(), y_pred_rf.min()), max(y_test.max(), y_pred_rf.max())]
+            ax.scatter(y_actual_rf, y_pred_rf, alpha=0.4, color="red", s=12)
+            lims = [min(y_actual_rf.min(), y_pred_rf.min()), max(y_actual_rf.max(), y_pred_rf.max())]
             ax.plot(lims, lims, "--", color="black", linewidth=1)
             ax.set_title("Scatter – Random Forest"); ax.set_xlabel("Aktual"); ax.set_ylabel("Prediksi")
             st.pyplot(fig)
 
         st.subheader("5.5 Distribusi Residual / Error")
-        res_xgb = y_test.values - y_pred_xgb
-        res_rf = y_test.values - y_pred_rf
+        res_xgb = y_actual_xgb - y_pred_xgb
+        res_rf = y_actual_rf - y_pred_rf
         fig, ax = plt.subplots(figsize=(12, 5))
         sns.histplot(res_xgb, bins=40, kde=True, color="blue", alpha=0.5, label="XGBoost", ax=ax)
         sns.histplot(res_rf, bins=40, kde=True, color="red", alpha=0.5, label="Random Forest", ax=ax)
@@ -614,13 +636,15 @@ if uploaded_file is not None:
         model = xgb_model if model_choice == "XGBoost" else rf_model
 
         if st.button("Jalankan Prediksi"):
-            last_data = X.iloc[-1:].copy()
-            preds, current = [], last_data.copy()
+            last_features = X.iloc[-1:].copy()
+            price = close_price.iloc[-1]
+            preds, feat = [], last_features.copy()
             for _ in range(n_days):
-                p = model.predict(current)[0]
-                preds.append(p)
-                current = last_data.copy()
-                current["Open"] = p; current["High"] = p; current["Low"] = p
+                ret = model.predict(feat)[0]        
+                price = price * (1 + ret)            
+                preds.append(price)
+                feat = last_features.copy()
+                feat["Open"] = price; feat["High"] = price; feat["Low"] = price
             fdates = pd.date_range(start=df.index[-1] + pd.Timedelta(days=1), periods=n_days, freq="B")
             fdf = pd.DataFrame({"Prediksi": preds}, index=fdates)
 
@@ -635,4 +659,5 @@ if uploaded_file is not None:
             c1.metric("Hari ke-1", f"Rp {preds[0]:,.0f}")
             c2.metric(f"Hari ke-{n_days}", f"Rp {preds[-1]:,.0f}")
             st.dataframe(fdf.style.format({"Prediksi": "Rp {:,.0f}"}), use_container_width=True)
-            st.caption("⚠️ Prediksi jangka panjang bersifat estimasi (SMA, RSI diasumsikan tetap).")
+            st.caption("Prediksi menggunakan metode return (perubahan harga) yang direkonstruksi "
+                       "secara iteratif untuk mengatasi keterbatasan ekstrapolasi model.")
