@@ -92,12 +92,14 @@ def _read_any(file_bytes, file_name):
             pass
         raw = pd.read_csv(io.BytesIO(file_bytes), header=None)
 
+    # Sudah rapi (>=7 kolom)
     if raw.shape[1] >= 7:
         if str(raw.iloc[0, 1]).strip().strip('"') in ("Terakhir", "Pembukaan"):
             raw = raw.iloc[1:].reset_index(drop=True)
         raw.columns = expected[:raw.shape[1]]
         return raw
 
+    # File 1 kolom: CSV mentah tergabung
     col0 = raw.iloc[:, 0].astype(str).str.replace('"', "", regex=False)
     col0 = col0[~col0.str.startswith("Tanggal")].reset_index(drop=True)
     rows = []
@@ -124,6 +126,7 @@ def load_and_process(file_bytes, file_name, fetch_online=True):
         "Terendah": "Low", "Vol.": "Volume", "Perubahan%": "Perubahan%",
     })
 
+    # Konversi harga (verified identik dengan notebook)
     for col in ["Close", "Open", "High", "Low"]:
         s = df[col].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
         df[col] = pd.to_numeric(s, errors="coerce")
@@ -259,13 +262,14 @@ if uploaded_file is not None:
                 "RSI", "Gold_Close", "Nickel_Close"]
     target = "Close"
 
+    # ── Opsi A: Target prediksi = RETURN (mengatasi keterbatasan ekstrapolasi) ──
     df_model = df.dropna(subset=["SMA_50", "SMA_200", "RSI"]).copy()
     df_model["Target_Return"] = df_model["Close"].pct_change().shift(-1)
     df_model = df_model.dropna(subset=["Target_Return"])
 
     X = df_model[features]
-    y = df_model["Target_Return"]         
-    close_price = df_model["Close"]      
+    y = df_model["Target_Return"]          # target = return
+    close_price = df_model["Close"]        # harga asli untuk rekonstruksi
 
     split_idx = int(len(X) * 0.8)
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
@@ -387,7 +391,7 @@ if uploaded_file is not None:
         ax.set_title("Daily Return Saham ANTAM"); ax.set_xlabel("Tanggal"); ax.set_ylabel("Return Harian")
         ax.legend(); st.pyplot(fig)
 
-        st.subheader("3.4 Distribusi Daily Return")
+        st.subheader("3.4 Distribusi & Rata-Rata Daily Return")
         dr = df["Daily Return"].dropna()
         avg_dr = dr.mean()
         std_dr = dr.std()
@@ -452,6 +456,21 @@ if uploaded_file is not None:
         ax.set_title("Grafik RSI – Saham ANTAM"); ax.set_xlabel("Tanggal"); ax.set_ylabel("RSI")
         ax.legend(); st.pyplot(fig)
 
+        st.subheader("3.7 Pemilihan Fitur")
+        st.markdown("Fitur yang digunakan sebagai variabel input (X) untuk memprediksi "
+                    "harga penutupan (Close) terdiri dari 9 fitur berikut:")
+        fitur_df = pd.DataFrame({
+            "No": range(1, len(features) + 1),
+            "Nama Fitur": features,
+            "Keterangan": [
+                "Harga pembukaan saham", "Harga tertinggi saham", "Harga terendah saham",
+                "Volume perdagangan", "Rata-rata bergerak 50 hari", "Rata-rata bergerak 200 hari",
+                "Relative Strength Index", "Harga penutupan emas", "Harga penutupan nikel"
+            ]
+        })
+        st.dataframe(fitur_df, use_container_width=True, hide_index=True)
+        st.caption("Target (y): Return — persentase perubahan harga penutupan saham ANTM.")
+
         st.subheader("3.7.1 Korelasi ANTAM vs Emas & Nikel")
         fig, ax = plt.subplots(figsize=(6, 5))
         sns.heatmap(df_model[["Close", "Gold_Close", "Nickel_Close"]].corr(),
@@ -471,23 +490,8 @@ if uploaded_file is not None:
 
         st.subheader("3.8 Heatmap Korelasi Fitur")
         fig, ax = plt.subplots(figsize=(11, 8))
-        sns.heatmap(df_model[features + [target]].corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
+        sns.heatmap(df_model[features + ["Close"]].corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
         ax.set_title("Matriks Korelasi Fitur dan Target"); st.pyplot(fig)
-
-        st.subheader("3.7 Pemilihan Fitur")
-        st.markdown("Fitur yang digunakan sebagai variabel input (X) untuk memprediksi "
-                    "harga penutupan (Close) terdiri dari 9 fitur berikut:")
-        fitur_df = pd.DataFrame({
-            "No": range(1, len(features) + 1),
-            "Nama Fitur": features,
-            "Keterangan": [
-                "Harga pembukaan saham", "Harga tertinggi saham", "Harga terendah saham",
-                "Volume perdagangan", "Rata-rata bergerak 50 hari", "Rata-rata bergerak 200 hari",
-                "Relative Strength Index", "Harga penutupan emas", "Harga penutupan nikel"
-            ]
-        })
-        st.dataframe(fitur_df, use_container_width=True, hide_index=True)
-        st.caption(f"Target (y): Close — harga penutupan saham ANTM.")
 
         st.subheader("3.9 Split Data Latih dan Data Uji (80:20)")
         c1, c2, c3 = st.columns(3)
@@ -640,8 +644,8 @@ if uploaded_file is not None:
             price = close_price.iloc[-1]
             preds, feat = [], last_features.copy()
             for _ in range(n_days):
-                ret = model.predict(feat)[0]        
-                price = price * (1 + ret)            
+                ret = model.predict(feat)[0]        # prediksi return
+                price = price * (1 + ret)            # rekonstruksi harga
                 preds.append(price)
                 feat = last_features.copy()
                 feat["Open"] = price; feat["High"] = price; feat["Low"] = price
