@@ -116,7 +116,7 @@ def _read_any(file_bytes, file_name):
 
 
 @st.cache_data(show_spinner=False)
-def load_and_process(file_bytes, file_name, fetch_online=True):
+def load_and_process(file_bytes, file_name, gn_bytes=None):
     df = _read_any(file_bytes, file_name)
 
     df["Tanggal"] = pd.to_datetime(df["Tanggal"], dayfirst=True)
@@ -134,56 +134,34 @@ def load_and_process(file_bytes, file_name, fetch_online=True):
     df["Volume"] = df["Volume"].apply(convert_volume)
     df["Volume"] = pd.to_numeric(df["Volume"], errors="coerce")
 
-    start_date = str(df.index.min().date())
-    end_date = str(df.index.max().date())
-
     log, gold, nickel = [], None, None
-    if fetch_online:
+
+    # ── Baca emas & nikel dari file CSV (gold_nickel.csv) ──
+    if gn_bytes is not None:
         try:
-            import yfinance as yf
-            g = yf.download("GC=F", start=start_date, end=end_date, progress=False)
-            if isinstance(g.columns, pd.MultiIndex):
-                g.columns = ["_".join(c).strip() for c in g.columns]
-                cc = [c for c in g.columns if "Close" in c][0]
-            else:
-                cc = "Close"
-            gold = g[[cc]].rename(columns={cc: "Gold_Close"})
-            gold.index = pd.to_datetime(gold.index)
-            log.append(f"Emas (GC=F): {len(gold)} baris")
-
-            for tk in ["NI=F", "INCO.JK"]:
-                try:
-                    nr = yf.download(tk, start=start_date, end=end_date, progress=False)
-                    if isinstance(nr.columns, pd.MultiIndex):
-                        nr.columns = ["_".join(c).strip() for c in nr.columns]
-                        c2 = [c for c in nr.columns if "Close" in c][0]
-                    else:
-                        c2 = "Close"
-                    nr = nr[[c2]].rename(columns={c2: "Nickel_Close_Raw"})
-                    if len(nr) > 100 and nr["Nickel_Close_Raw"].isna().mean() < 0.5:
-                        nickel = nr.copy()
-                        log.append(f"Nikel ({tk}): {len(nickel)} baris")
-                        break
-                except Exception:
-                    continue
+            gn = pd.read_csv(io.BytesIO(gn_bytes))
+            gn["Date"] = pd.to_datetime(gn["Date"])
+            gn = gn.set_index("Date")
+            gold = gn[["Gold_Close"]].copy()
+            nickel = gn[["Nickel_Close"]].copy()
+            log.append(f"Emas & nikel dimuat dari gold_nickel.csv ({len(gn)} baris)")
         except Exception as e:
-            log.append(f"Gagal yfinance: {e}")
+            log.append(f"Gagal baca gold_nickel.csv: {e}")
 
+    # ── Fallback estimasi jika CSV tidak ada ──
     if gold is None:
         gold = pd.DataFrame({"Gold_Close": df["Close"].rolling(5, min_periods=1).mean()})
         gold.index = df.index
-        log.append("Emas: fallback estimasi (offline)")
+        log.append("Emas: fallback estimasi (gold_nickel.csv tidak ditemukan)")
 
     if nickel is None:
         amin, amax = df["Close"].min(), df["Close"].max()
         ns = (df["Close"] - amin) / (amax - amin) * (48000 - 8000) + 8000
-        nickel = pd.DataFrame({"Nickel_Close_Raw": ns})
+        nickel = pd.DataFrame({"Nickel_Close": ns})
         nickel.index = df.index
-        log.append("Nikel: fallback estimasi (offline)")
+        log.append("Nikel: fallback estimasi (gold_nickel.csv tidak ditemukan)")
 
-    nmean = nickel["Nickel_Close_Raw"].mean()
-    nickel["Nickel_Close"] = nickel["Nickel_Close_Raw"] / 10 if nmean > 10000 else nickel["Nickel_Close_Raw"]
-
+    gold.index = pd.to_datetime(gold.index)
     nickel.index = pd.to_datetime(nickel.index)
     df = df.join(gold[["Gold_Close"]], how="left")
     df = df.join(nickel[["Nickel_Close"]], how="left")
@@ -227,8 +205,9 @@ def evaluate(y_true, y_pred, name):
 # ============================================================================
 st.sidebar.title("⚙️ Pengaturan")
 uploaded_file = st.sidebar.file_uploader("Upload Data ANTM (CSV / XLSX)", type=["csv", "xlsx", "xls"])
-fetch_online = st.sidebar.checkbox("Unduh emas & nikel via yfinance", value=True,
-                                   help="Matikan jika tanpa internet (pakai estimasi).")
+gn_file = st.sidebar.file_uploader("Upload gold_nickel.csv (emas & nikel)", type=["csv"],
+                                   help="File data emas & nikel agar hasil identik dengan notebook. "
+                                        "Jika tidak diisi, aplikasi memakai estimasi.")
 menu = st.sidebar.radio("Navigasi", ["🏠 Beranda", "📊 Eksplorasi Data",
                                      "📈 Analisis Teknikal", "🤖 Pemodelan & Evaluasi", "🔮 Prediksi"])
 st.sidebar.markdown("---")
@@ -243,19 +222,20 @@ if menu == "🏠 Beranda":
     st.markdown("""
     Aplikasi ini disamakan dengan notebook skripsi:
     - Konversi harga identik dengan notebook
-    - Data **emas (GC=F)** & **nikel (NI=F / INCO.JK)** diunduh asli via yfinance
+    - Data **emas & nikel** dibaca dari file `gold_nickel.csv` agar hasil MAPE konsisten
     - Semua grafik mengikuti notebook
 
-    Upload `Data_Historis_ANTM.csv` atau `.xlsx` di sidebar untuk memulai.
+    Upload `Data_Historis_ANTM.csv` (atau `.xlsx`) dan `gold_nickel.csv` di sidebar untuk memulai.
     """)
     if uploaded_file is None:
-        st.warning("⬅️ Upload file terlebih dahulu.")
+        st.warning("⬅️ Upload file data ANTM terlebih dahulu.")
 
 
 if uploaded_file is not None:
     file_bytes = uploaded_file.getvalue()
-    with st.spinner("Memuat & memproses data (mengunduh emas/nikel bila online)..."):
-        df, log = load_and_process(file_bytes, uploaded_file.name, fetch_online)
+    gn_bytes = gn_file.getvalue() if gn_file is not None else None
+    with st.spinner("Memuat & memproses data..."):
+        df, log = load_and_process(file_bytes, uploaded_file.name, gn_bytes)
         df = add_indicators(df)
 
     features = ["Open", "High", "Low", "Volume", "SMA_50", "SMA_200",
