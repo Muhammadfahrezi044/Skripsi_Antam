@@ -92,12 +92,14 @@ def _read_any(file_bytes, file_name):
             pass
         raw = pd.read_csv(io.BytesIO(file_bytes), header=None)
 
+    # Sudah rapi (>=7 kolom)
     if raw.shape[1] >= 7:
         if str(raw.iloc[0, 1]).strip().strip('"') in ("Terakhir", "Pembukaan"):
             raw = raw.iloc[1:].reset_index(drop=True)
         raw.columns = expected[:raw.shape[1]]
         return raw
 
+    # File 1 kolom: CSV mentah tergabung
     col0 = raw.iloc[:, 0].astype(str).str.replace('"', "", regex=False)
     col0 = col0[~col0.str.startswith("Tanggal")].reset_index(drop=True)
     rows = []
@@ -124,6 +126,7 @@ def load_and_process(file_bytes, file_name, fetch_online=True):
         "Terendah": "Low", "Vol.": "Volume", "Perubahan%": "Perubahan%",
     })
 
+    # Konversi harga (verified identik dengan notebook)
     for col in ["Close", "Open", "High", "Low"]:
         s = df[col].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
         df[col] = pd.to_numeric(s, errors="coerce")
@@ -257,15 +260,15 @@ if uploaded_file is not None:
 
     features = ["Open", "High", "Low", "Volume", "SMA_50", "SMA_200",
                 "RSI", "Gold_Close", "Nickel_Close"]
-    target = "Close"
 
+    # ── Opsi A: Target prediksi = RETURN (mengatasi keterbatasan ekstrapolasi) ──
     df_model = df.dropna(subset=["SMA_50", "SMA_200", "RSI"]).copy()
     df_model["Target_Return"] = df_model["Close"].pct_change().shift(-1)
     df_model = df_model.dropna(subset=["Target_Return"])
 
     X = df_model[features]
-    y = df_model["Target_Return"]         
-    close_price = df_model["Close"]      
+    y = df_model["Target_Return"]          # target = return
+    close_price = df_model["Close"]        # harga asli untuk rekonstruksi
 
     split_idx = int(len(X) * 0.8)
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
@@ -387,7 +390,7 @@ if uploaded_file is not None:
         ax.set_title("Daily Return Saham ANTAM"); ax.set_xlabel("Tanggal"); ax.set_ylabel("Return Harian")
         ax.legend(); st.pyplot(fig)
 
-        st.subheader("3.4 Distribusi Daily Return")
+        st.subheader("3.4 Distribusi & Rata-Rata Daily Return")
         dr = df["Daily Return"].dropna()
         avg_dr = dr.mean()
         std_dr = dr.std()
@@ -434,10 +437,14 @@ if uploaded_file is not None:
         st.subheader("3.5 Moving Average (SMA-50 & SMA-200)")
         fig, ax = plt.subplots(figsize=(14, 6))
         wl_c = safe_window(len(df["Close"].dropna()), 51)
+        # Dihitung ulang TANPA min_periods agar identik dengan notebook (Cell 37),
+        # karena df["SMA_50"]/df["SMA_200"] versi min_periods=20/50 hanya untuk pemodelan.
+        sma50_chart = df["Close"].rolling(window=50).mean()
+        sma200_chart = df["Close"].rolling(window=200).mean()
         ax.plot(df.index, df["Close"], label="Close (Asli)", color="black", alpha=0.2, linewidth=0.7)
         ax.plot(df.index, savgol_filter(df["Close"].values, wl_c, 3), label="Close (Smoothed)", color="black", linewidth=1.8)
-        ax.plot(df.index, df["SMA_50"], label="SMA 50 hari", color="blue")
-        ax.plot(df.index, df["SMA_200"], label="SMA 200 hari", color="red")
+        ax.plot(df.index, sma50_chart, label="SMA 50 hari", color="blue")
+        ax.plot(df.index, sma200_chart, label="SMA 200 hari", color="red")
         ax.set_title("Grafik Moving Average – Saham ANTAM"); ax.set_xlabel("Tanggal"); ax.set_ylabel("Harga (IDR)")
         ax.legend(); st.pyplot(fig)
 
@@ -451,6 +458,21 @@ if uploaded_file is not None:
         ax.axhline(50, linestyle=":", color="gray", alpha=0.6)
         ax.set_title("Grafik RSI – Saham ANTAM"); ax.set_xlabel("Tanggal"); ax.set_ylabel("RSI")
         ax.legend(); st.pyplot(fig)
+
+        st.subheader("3.7 Pemilihan Fitur")
+        st.markdown("Fitur yang digunakan sebagai variabel input (X) untuk memprediksi "
+                    "harga penutupan (Close) terdiri dari 9 fitur berikut:")
+        fitur_df = pd.DataFrame({
+            "No": range(1, len(features) + 1),
+            "Nama Fitur": features,
+            "Keterangan": [
+                "Harga pembukaan saham", "Harga tertinggi saham", "Harga terendah saham",
+                "Volume perdagangan", "Rata-rata bergerak 50 hari", "Rata-rata bergerak 200 hari",
+                "Relative Strength Index", "Harga penutupan emas", "Harga penutupan nikel"
+            ]
+        })
+        st.dataframe(fitur_df, use_container_width=True, hide_index=True)
+        st.caption("Target (y): Return — persentase perubahan harga penutupan saham ANTM.")
 
         st.subheader("3.7.1 Korelasi ANTAM vs Emas & Nikel")
         fig, ax = plt.subplots(figsize=(6, 5))
@@ -470,24 +492,10 @@ if uploaded_file is not None:
         ax.legend(); st.pyplot(fig)
 
         st.subheader("3.8 Heatmap Korelasi Fitur")
-        fig, ax = plt.subplots(figsize=(11, 8))
-        sns.heatmap(df_model[features + [target]].corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
-        ax.set_title("Matriks Korelasi Fitur dan Target"); st.pyplot(fig)
-
-        st.subheader("3.7 Pemilihan Fitur")
-        st.markdown("Fitur yang digunakan sebagai variabel input (X) untuk memprediksi "
-                    "harga penutupan (Close) terdiri dari 9 fitur berikut:")
-        fitur_df = pd.DataFrame({
-            "No": range(1, len(features) + 1),
-            "Nama Fitur": features,
-            "Keterangan": [
-                "Harga pembukaan saham", "Harga tertinggi saham", "Harga terendah saham",
-                "Volume perdagangan", "Rata-rata bergerak 50 hari", "Rata-rata bergerak 200 hari",
-                "Relative Strength Index", "Harga penutupan emas", "Harga penutupan nikel"
-            ]
-        })
-        st.dataframe(fitur_df, use_container_width=True, hide_index=True)
-        st.caption(f"Target (y): Close — harga penutupan saham ANTM.")
+        fig, ax = plt.subplots(figsize=(12, 10))
+        # Korelasi terhadap Target_Return (variabel target sesungguhnya), sesuai notebook (Cell 48)
+        sns.heatmap(df_model[features + ["Target_Return"]].corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
+        ax.set_title("Matriks Korelasi Fitur dan Target (Close)"); st.pyplot(fig)
 
         st.subheader("3.9 Split Data Latih dan Data Uji (80:20)")
         c1, c2, c3 = st.columns(3)
@@ -526,14 +534,18 @@ if uploaded_file is not None:
         st.subheader("4.2 & 4.5 Feature Importance")
         ca, cb = st.columns(2)
         with ca:
-            imp = pd.DataFrame({"Fitur": features, "Importance": xgb_model.feature_importances_}).sort_values("Importance", ascending=False)
-            fig, ax = plt.subplots(figsize=(8, 6))
+            imp = pd.DataFrame({"Fitur": features, "Importance": xgb_model.feature_importances_}).sort_values("Importance", ascending=False).reset_index(drop=True)
+            fig, ax = plt.subplots(figsize=(10, 6))
             sns.barplot(x="Importance", y="Fitur", data=imp, hue="Fitur", palette="coolwarm", legend=False, ax=ax)
+            for i, v in enumerate(imp["Importance"]):
+                ax.text(v + 0.001, i, f"{v:.4f}", va="center", fontsize=9)
             ax.set_title("Feature Importance – XGBoost"); st.pyplot(fig)
         with cb:
-            imp = pd.DataFrame({"Fitur": features, "Importance": rf_model.feature_importances_}).sort_values("Importance", ascending=False)
-            fig, ax = plt.subplots(figsize=(8, 6))
+            imp = pd.DataFrame({"Fitur": features, "Importance": rf_model.feature_importances_}).sort_values("Importance", ascending=False).reset_index(drop=True)
+            fig, ax = plt.subplots(figsize=(10, 6))
             sns.barplot(x="Importance", y="Fitur", data=imp, hue="Fitur", palette="viridis", legend=False, ax=ax)
+            for i, v in enumerate(imp["Importance"]):
+                ax.text(v + 0.001, i, f"{v:.4f}", va="center", fontsize=9)
             ax.set_title("Feature Importance – Random Forest"); st.pyplot(fig)
 
         st.subheader("4.4 Visualisasi Pohon Random Forest")
@@ -589,40 +601,47 @@ if uploaded_file is not None:
         ax.legend(); st.pyplot(fig)
 
         st.subheader("5.4 Scatter Plot Aktual vs Prediksi")
+        mape_xgb_val = hasil.loc[hasil["Model"] == "XGBoost", "MAPE (%)"].values[0]
+        mape_rf_val = hasil.loc[hasil["Model"] == "Random Forest", "MAPE (%)"].values[0]
         ca, cb = st.columns(2)
         with ca:
             fig, ax = plt.subplots(figsize=(7, 6))
-            ax.scatter(y_actual_xgb, y_pred_xgb, alpha=0.4, color="blue", s=12)
+            ax.scatter(y_actual_xgb, y_pred_xgb, alpha=0.5, color="blue")
             lims = [min(y_actual_xgb.min(), y_pred_xgb.min()), max(y_actual_xgb.max(), y_pred_xgb.max())]
-            ax.plot(lims, lims, "--", color="black", linewidth=1)
-            ax.set_title("Scatter – XGBoost"); ax.set_xlabel("Aktual"); ax.set_ylabel("Prediksi")
+            ax.plot(lims, lims, "--", color="black")
+            ax.set_title(f"XGBoost (MAPE={mape_xgb_val:.2f}%)"); ax.set_xlabel("Aktual"); ax.set_ylabel("Prediksi")
             st.pyplot(fig)
         with cb:
             fig, ax = plt.subplots(figsize=(7, 6))
-            ax.scatter(y_actual_rf, y_pred_rf, alpha=0.4, color="red", s=12)
+            ax.scatter(y_actual_rf, y_pred_rf, alpha=0.5, color="red")
             lims = [min(y_actual_rf.min(), y_pred_rf.min()), max(y_actual_rf.max(), y_pred_rf.max())]
-            ax.plot(lims, lims, "--", color="black", linewidth=1)
-            ax.set_title("Scatter – Random Forest"); ax.set_xlabel("Aktual"); ax.set_ylabel("Prediksi")
+            ax.plot(lims, lims, "--", color="black")
+            ax.set_title(f"Random Forest (MAPE={mape_rf_val:.2f}%)"); ax.set_xlabel("Aktual"); ax.set_ylabel("Prediksi")
             st.pyplot(fig)
 
         st.subheader("5.5 Distribusi Residual / Error")
         res_xgb = y_actual_xgb - y_pred_xgb
         res_rf = y_actual_rf - y_pred_rf
-        fig, ax = plt.subplots(figsize=(12, 5))
-        sns.histplot(res_xgb, bins=40, kde=True, color="blue", alpha=0.5, label="XGBoost", ax=ax)
-        sns.histplot(res_rf, bins=40, kde=True, color="red", alpha=0.5, label="Random Forest", ax=ax)
-        ax.axvline(0, color="black", linewidth=0.8)
-        ax.set_title("Distribusi Residual (Error) Kedua Model")
-        ax.set_xlabel("Residual (Aktual - Prediksi)"); ax.set_ylabel("Frekuensi")
-        ax.legend(); st.pyplot(fig)
+        # Dua subplot terpisah (side-by-side), sesuai notebook (Cell 78)
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        sns.histplot(res_xgb, bins=40, kde=True, color="blue", ax=axes[0])
+        axes[0].axvline(0, color="black", linestyle="--")
+        axes[0].set_title("Distribusi Residual – XGBoost")
+        axes[0].set_xlabel("Residual (Aktual − Prediksi)")
+
+        sns.histplot(res_rf, bins=40, kde=True, color="red", ax=axes[1])
+        axes[1].axvline(0, color="black", linestyle="--")
+        axes[1].set_title("Distribusi Residual – Random Forest")
+        axes[1].set_xlabel("Residual (Aktual − Prediksi)")
+        st.pyplot(fig)
 
         st.subheader("5.6 Perbandingan MAPE")
-        fig, ax = plt.subplots(figsize=(8, 5))
-        mape_vals = [hasil.loc[0, "MAPE (%)"], hasil.loc[1, "MAPE (%)"]]
-        bars = ax.bar(["XGBoost", "Random Forest"], mape_vals, color=["blue", "red"], edgecolor="black")
-        for b, v in zip(bars, mape_vals):
-            ax.text(b.get_x() + b.get_width()/2, v, f"{v:.4f}%", ha="center", va="bottom", fontsize=10)
-        ax.set_title("Perbandingan MAPE Kedua Model"); ax.set_ylabel("MAPE (%)")
+        fig, ax = plt.subplots(figsize=(7, 4))
+        sns.barplot(x="Model", y="MAPE (%)", data=hasil, hue="Model",
+                    palette=["steelblue", "tomato"], legend=False, ax=ax)
+        for i, v in enumerate(hasil["MAPE (%)"]):
+            ax.text(i, v + 0.02, f"{v:.4f}%", ha="center", fontweight="bold")
+        ax.set_title("Perbandingan MAPE antar Model")
         st.pyplot(fig)
 
     # --------------------------------------------------------------------
@@ -640,8 +659,8 @@ if uploaded_file is not None:
             price = close_price.iloc[-1]
             preds, feat = [], last_features.copy()
             for _ in range(n_days):
-                ret = model.predict(feat)[0]        
-                price = price * (1 + ret)            
+                ret = model.predict(feat)[0]        # prediksi return
+                price = price * (1 + ret)            # rekonstruksi harga
                 preds.append(price)
                 feat = last_features.copy()
                 feat["Open"] = price; feat["High"] = price; feat["Low"] = price
