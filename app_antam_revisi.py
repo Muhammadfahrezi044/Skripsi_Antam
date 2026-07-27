@@ -194,10 +194,13 @@ def load_and_process(file_bytes, file_name, fetch_online=True):
 
 def add_indicators(df):
     df = df.copy()
-    df = df.dropna(subset=["Close", "Open", "High", "Low", "Volume"])
+    # Disamakan dengan notebook (Cell 30): dropna() penuh, bukan hanya subset kolom OHLCV
+    df = df.dropna()
     df["Daily Return"] = df["Close"].pct_change()
-    df["SMA_50"] = df["Close"].rolling(window=50, min_periods=20).mean()
-    df["SMA_200"] = df["Close"].rolling(window=200, min_periods=50).mean()
+    # Disamakan dengan notebook (Cell 39): TANPA min_periods, agar SMA_50/SMA_200
+    # baru terisi setelah 50/200 baris tersedia -> sama persis dengan notebook
+    df["SMA_50"] = df["Close"].rolling(window=50).mean()
+    df["SMA_200"] = df["Close"].rolling(window=200).mean()
     df["RSI"] = compute_rsi(df["Close"], period=14)
     return df
 
