@@ -126,10 +126,19 @@ def load_and_process(file_bytes, file_name, fetch_online=True):
         "Terendah": "Low", "Vol.": "Volume", "Perubahan%": "Perubahan%",
     })
 
-    # Konversi harga (verified identik dengan notebook)
+    # Konversi harga - disamakan PERSIS dengan notebook (Cell 1):
+    #   df[col] = pd.to_numeric(df[col])       -> pandas mem-parsing "1.940" sbg 1.94 (titik dibaca desimal)
+    #   df[col] = normalize_price(x * 1000)    -> dikembalikan ke skala asli, lalu dibagi 1000 jika >10000
     for col in ["Close", "Open", "High", "Low"]:
-        s = df[col].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
-        df[col] = pd.to_numeric(s, errors="coerce")
+        raw = pd.to_numeric(df[col], errors="coerce")
+        if raw.isna().mean() > 0.5:
+            # Fallback: kolom berisi format string dengan pemisah ribuan "." / desimal ","
+            # (nilai sudah dalam skala penuh, TIDAK perlu dikali 1000 lagi)
+            s = df[col].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+            df[col] = pd.to_numeric(s, errors="coerce")
+        else:
+            raw = raw * 1000
+            df[col] = raw.apply(lambda x: x / 1000.0 if pd.notna(x) and x > 10000.0 else x)
 
     df["Volume"] = df["Volume"].apply(convert_volume)
     df["Volume"] = pd.to_numeric(df["Volume"], errors="coerce")
