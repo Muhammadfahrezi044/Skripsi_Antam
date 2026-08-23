@@ -1,32 +1,3 @@
-"""
-============================================================================
- APLIKASI PREDIKSI HARGA SAHAM ANTAM (ANTM)
- XGBoost & Random Forest  -  Skripsi Muhammad Fahrezi
-============================================================================
- Disamakan PERSIS dengan notebook FINAL (setelah seluruh revisi dosen
- penguji), mencakup:
-   - 10 fitur: Open, High, Low, Volume, SMA_50, SMA_200, RSI,
-     Gold_Close, Nickel_Close, USDIDR_Close
-   - Target = return harian (bukan harga langsung), dikonversi balik ke
-     harga memakai Harga_prediksi(t+1) = Harga_aktual(t) x (1 + return)
-   - Sumber data nikel = harga komoditas nikel dunia (NI=F) atau file
-     manual (investing.com dsb.) -- TIDAK memakai proksi saham
-     perusahaan tambang (mis. INCO.JK), karena itu tidak valid secara
-     konseptual
-   - Hyperparameter tuning (RandomizedSearchCV + TimeSeriesSplit)
-   - 4 metrik evaluasi (MAPE, MAE, RMSE, R2) + Directional Accuracy
-   - Validasi silang time-series (k-fold walk-forward)
-   - Prediksi 30 hari ke depan dengan SMA/RSI dihitung ulang tiap
-     iterasi, dan Gold/Nickel/USDIDR diekstrapolasi memakai naive drift
-     (bukan dibekukan konstan)
-   - Deduplikasi baris tanggal ganda pada data sumber
-
- Jalankan:
-   pip install -r requirements.txt
-   streamlit run app_antam.py
-============================================================================
-"""
-
 import io
 import numpy as np
 import pandas as pd
