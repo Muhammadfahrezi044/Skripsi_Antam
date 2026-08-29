@@ -1,3 +1,32 @@
+"""
+============================================================================
+ APLIKASI PREDIKSI HARGA SAHAM ANTAM (ANTM)
+ XGBoost & Random Forest  -  Skripsi Muhammad Fahrezi
+============================================================================
+ Disamakan PERSIS dengan notebook FINAL (setelah seluruh revisi dosen
+ penguji), mencakup:
+   - 10 fitur: Open, High, Low, Volume, SMA_50, SMA_200, RSI,
+     Gold_Close, Nickel_Close, USDIDR_Close
+   - Target = return harian (bukan harga langsung), dikonversi balik ke
+     harga memakai Harga_prediksi(t+1) = Harga_aktual(t) x (1 + return)
+   - Sumber data nikel = harga komoditas nikel dunia (NI=F) atau file
+     manual (investing.com dsb.) -- TIDAK memakai proksi saham
+     perusahaan tambang (mis. INCO.JK), karena itu tidak valid secara
+     konseptual
+   - Hyperparameter tuning (RandomizedSearchCV + TimeSeriesSplit)
+   - 4 metrik evaluasi (MAPE, MAE, RMSE, R2) + Directional Accuracy
+   - Validasi silang time-series (k-fold walk-forward)
+   - Prediksi 30 hari ke depan dengan SMA/RSI dihitung ulang tiap
+     iterasi, dan Gold/Nickel/USDIDR diekstrapolasi memakai naive drift
+     (bukan dibekukan konstan)
+   - Deduplikasi baris tanggal ganda pada data sumber
+
+ Jalankan:
+   pip install -r requirements.txt
+   streamlit run app_antam.py
+============================================================================
+"""
+
 import io
 import numpy as np
 import pandas as pd
@@ -388,7 +417,8 @@ nickel_manual_file = st.sidebar.file_uploader(
     help="Dipakai HANYA jika NI=F gagal diunduh otomatis. Unduh dari investing.com "
          "dengan rentang tanggal yang sama dengan data ANTM Anda.")
 menu = st.sidebar.radio("Navigasi", ["🏠 Beranda", "📊 Eksplorasi Data",
-                                      "📈 Analisis Teknikal", "🤖 Pemodelan & Evaluasi", "🔮 Prediksi"])
+                                      "📈 Analisis Teknikal", "🤖 Pemodelan & Evaluasi",
+                                      "🎯 Perbaikan Directional Accuracy", "🔮 Prediksi"])
 st.sidebar.markdown("---")
 st.sidebar.info("Skripsi Prediksi Saham ANTAM\nXGBoost vs Random Forest (Tuned)")
 
@@ -795,6 +825,136 @@ if uploaded_file is not None:
 
         st.session_state["xgb_model"] = xgb_model
         st.session_state["rf_model"] = rf_model
+
+    # --------------------------------------------------------------------
+    elif menu == "🎯 Perbaikan Directional Accuracy":
+        st.title("🎯 Perbaikan Directional Accuracy")
+        st.caption("Diagnostik menunjukkan model bias memprediksi arah \"naik\" karena fitur "
+                   "berupa level harga absolut yang membawa informasi tren jangka panjang. "
+                   "Perbaikan dilakukan dengan detrending (semua fitur diubah jadi return/rasio "
+                   "relatif) dan class balancing.")
+
+        from sklearn.ensemble import RandomForestClassifier
+        from xgboost import XGBClassifier
+        from sklearn.metrics import accuracy_score, confusion_matrix
+
+        df_dir = df_model.copy()
+        df_dir["ret_1"]      = df_dir["Close"].pct_change(1)
+        df_dir["ret_5"]      = df_dir["Close"].pct_change(5)
+        df_dir["ret_10"]     = df_dir["Close"].pct_change(10)
+        df_dir["vol_10"]     = df_dir["Close"].pct_change().rolling(10).std()
+        df_dir["hl_range"]   = (df_dir["High"] - df_dir["Low"]) / df_dir["Close"]
+        df_dir["co_ret"]     = (df_dir["Close"] - df_dir["Open"]) / df_dir["Open"]
+        df_dir["sma50_rel"]  = df_dir["Close"] / df_dir["SMA_50"] - 1
+        df_dir["sma200_rel"] = df_dir["Close"] / df_dir["SMA_200"] - 1
+        df_dir["rsi_n"]      = df_dir["RSI"] / 100
+        df_dir["vol_chg"]    = df_dir["Volume"].pct_change().replace([np.inf, -np.inf], np.nan)
+        df_dir["gold_ret"]   = df_dir["Gold_Close"].pct_change()
+        df_dir["nickel_ret"] = df_dir["Nickel_Close"].pct_change()
+        df_dir["usd_ret"]    = df_dir["USDIDR_Close"].pct_change()
+
+        FITUR_DETREND = ["ret_1", "ret_5", "ret_10", "vol_10", "hl_range", "co_ret",
+                         "sma50_rel", "sma200_rel", "rsi_n", "vol_chg",
+                         "gold_ret", "nickel_ret", "usd_ret"]
+        df_dir = df_dir.replace([np.inf, -np.inf], np.nan).dropna(subset=FITUR_DETREND + ["Target_Return"])
+
+        X_dir = df_dir[FITUR_DETREND]
+        y_dir = (df_dir["Target_Return"] > 0).astype(int)
+        split_dir = int(len(X_dir) * 0.8)
+        X_dtr, X_dte = X_dir.iloc[:split_dir], X_dir.iloc[split_dir:]
+        y_dtr, y_dte = y_dir.iloc[:split_dir].values, y_dir.iloc[split_dir:].values
+        spw = (y_dtr == 0).sum() / max((y_dtr == 1).sum(), 1)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Jumlah Fitur Detrended", len(FITUR_DETREND))
+        c2.metric("Data Latih / Uji", f"{len(X_dtr)} / {len(X_dte)}")
+        c3.metric("scale_pos_weight", f"{spw:.3f}")
+
+        with st.spinner("Melatih model klasifikasi arah..."):
+            hasil_dir, preds_dir = [], {}
+            for nama, model in [
+                ("XGBoost", XGBClassifier(n_estimators=300, max_depth=3, learning_rate=0.03,
+                                          subsample=0.8, colsample_bytree=0.8,
+                                          scale_pos_weight=spw, random_state=42, eval_metric="logloss")),
+                ("Random Forest", RandomForestClassifier(n_estimators=500, max_depth=5, min_samples_leaf=4,
+                                                         max_features="log2", class_weight="balanced",
+                                                         random_state=42)),
+            ]:
+                model.fit(X_dtr, y_dtr)
+                pred = model.predict(X_dte)
+                preds_dir[nama] = pred
+                hasil_dir.append({
+                    "Model": nama,
+                    "Directional Accuracy (%)": accuracy_score(y_dte, pred) * 100,
+                    "Proporsi Prediksi Naik (%)": pred.mean() * 100,
+                })
+
+        rng_cmp = np.random.default_rng(42)
+        da_acak = np.mean([(y_dte == rng_cmp.choice([0, 1], size=len(y_dte))).mean() * 100
+                            for _ in range(500)])
+        da_mayoritas = max(y_dte.mean(), 1 - y_dte.mean()) * 100
+
+        st.subheader("Hasil Setelah Perbaikan")
+        tabel_dir = pd.DataFrame(hasil_dir)
+        st.dataframe(tabel_dir.style.format({"Directional Accuracy (%)": "{:.2f}",
+                                              "Proporsi Prediksi Naik (%)": "{:.2f}"}),
+                     use_container_width=True)
+        st.caption(f"Proporsi arah naik aktual pada data uji: {y_dte.mean()*100:.2f}%")
+
+        b1, b2 = st.columns(2)
+        b1.metric("Baseline Tebakan Acak", f"{da_acak:.2f}%")
+        b2.metric("Baseline Kelas Mayoritas", f"{da_mayoritas:.2f}%")
+
+        best_da = tabel_dir["Directional Accuracy (%)"].max()
+        if best_da > da_mayoritas:
+            st.success(f"✅ Model terbaik ({best_da:.2f}%) melampaui baseline tebakan acak "
+                       f"({da_acak:.2f}%) DAN baseline kelas mayoritas ({da_mayoritas:.2f}%).")
+        elif best_da > da_acak:
+            st.warning(f"⚠️ Model terbaik ({best_da:.2f}%) melampaui tebakan acak tetapi belum "
+                       f"melampaui baseline kelas mayoritas ({da_mayoritas:.2f}%).")
+        else:
+            st.error(f"❌ Model terbaik ({best_da:.2f}%) belum melampaui baseline tebakan acak.")
+
+        st.subheader("Confusion Matrix Setelah Perbaikan")
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        for ax, nama in zip(axes, ["XGBoost", "Random Forest"]):
+            cm = confusion_matrix(y_dte, preds_dir[nama])
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False,
+                        xticklabels=["Turun", "Naik"], yticklabels=["Turun", "Naik"], ax=ax)
+            ax.set_title(f"Confusion Matrix — {nama}")
+            ax.set_xlabel("Prediksi"); ax.set_ylabel("Aktual")
+        plt.tight_layout(); st.pyplot(fig); plt.close(fig)
+
+        st.subheader("Validasi Walk-Forward (TimeSeriesSplit 5-fold)")
+        if st.checkbox("Jalankan validasi silang time-series (agak lambat)"):
+            with st.spinner("Menjalankan 5-fold walk-forward..."):
+                tscv_dir = TimeSeriesSplit(n_splits=5)
+                baris_cv = []
+                for nama, buat in [
+                    ("XGBoost", lambda w: XGBClassifier(n_estimators=300, max_depth=3, learning_rate=0.03,
+                                                        subsample=0.8, colsample_bytree=0.8,
+                                                        scale_pos_weight=w, random_state=42,
+                                                        eval_metric="logloss")),
+                    ("Random Forest", lambda w: RandomForestClassifier(n_estimators=500, max_depth=5,
+                                                                       min_samples_leaf=4, max_features="log2",
+                                                                       class_weight="balanced", random_state=42)),
+                ]:
+                    for k, (tr, te) in enumerate(tscv_dir.split(X_dir), start=1):
+                        ytr_k, yte_k = y_dir.iloc[tr].values, y_dir.iloc[te].values
+                        w = (ytr_k == 0).sum() / max((ytr_k == 1).sum(), 1)
+                        m = buat(w); m.fit(X_dir.iloc[tr], ytr_k)
+                        baris_cv.append({
+                            "Fold": k,
+                            "Periode": f"{df_dir.index[te].min().date()} s.d. {df_dir.index[te].max().date()}",
+                            "Model": nama,
+                            "Directional Accuracy (%)": accuracy_score(yte_k, m.predict(X_dir.iloc[te])) * 100,
+                        })
+                cv_dir = pd.DataFrame(baris_cv)
+            st.dataframe(cv_dir.style.format({"Directional Accuracy (%)": "{:.2f}"}),
+                         use_container_width=True)
+            st.markdown("**Ringkasan (rata-rata ± std lintas fold):**")
+            st.dataframe(cv_dir.groupby("Model")["Directional Accuracy (%)"].agg(["mean", "std"]),
+                         use_container_width=True)
 
     # --------------------------------------------------------------------
     elif menu == "🔮 Prediksi":
